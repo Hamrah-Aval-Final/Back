@@ -1,31 +1,105 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
 stages:
-- build
-- test
-- deploy
-- review
-- dast
-- staging
-- canary
-- production
-- incremental rollout 10%
-- incremental rollout 25%
-- incremental rollout 50%
-- incremental rollout 100%
-- performance
-- cleanup
-- secret-detection
-sast:
-  stage: test
-include:
-- template: Auto-DevOps.gitlab-ci.yml
+  - lint
+  - test
+  - sonar
+  - build
+
 variables:
-  SECRET_DETECTION_ENABLED: 'true'
-secret_detection:
-  stage: secret-detection
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  IMAGE_NAME: "$NEXUS_REGISTRY/threepod/backend"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+
+.default_python:
+  image: python:3.11-slim
+  tags:
+    - threepod
+    - ci
+    - test
+    - sonar
+  cache:
+    key: "$CI_PROJECT_NAME-pip"
+    paths:
+      - .cache/pip
+  before_script:
+    - python --version
+    - pip install --upgrade pip
+    - pip install -r requirements-dev.txt
+    - ln -sfn "$CI_PROJECT_DIR" "$CI_PROJECT_DIR/../Back"
+
+lint:
+  extends: .default_python
+  stage: lint
+  script:
+    - ruff check .
+
+test:
+  extends: .default_python
+  stage: test
+  variables:
+    DATABASE_URL: "sqlite:////tmp/threepod_backend_test.db"
+    DB_CONNECT_RETRIES: "1"
+  script:
+    - pytest --cov=Back --cov-report=xml --cov-report=term
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml
+    expire_in: 1 week
+
+sonarqube:
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  stage: sonar
+  tags:
+    - threepod
+    - ci
+    - test
+    - sonar
+  variables:
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "$CI_PROJECT_NAME-sonar"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner
+      -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+      -Dsonar.host.url="$SONAR_HOST_URL"
+      -Dsonar.token="$SONAR_TOKEN"
+      -Dsonar.sources=.
+      -Dsonar.tests=tests
+      -Dsonar.python.coverage.reportPaths=coverage.xml
+  needs:
+    - test
+  rules:
+    - if: '$SONAR_TOKEN && $SONAR_HOST_URL && $SONAR_PROJECT_KEY'
+
+build_image:
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  stage: build
+  tags:
+    - threepod
+    - build
+    - image
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$NEXUS_REGISTRY\":{\"username\":\"$NEXUS_USERNAME\",\"password\":\"$NEXUS_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$IMAGE_NAME:$IMAGE_TAG"
+      --destination "$IMAGE_NAME:$CI_COMMIT_REF_SLUG"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+/'
+    - if: '$CI_COMMIT_BRANCH == "main"'
