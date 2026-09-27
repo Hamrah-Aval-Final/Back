@@ -1,0 +1,28 @@
+name: threepod-dev-backend
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: threepod-dev-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    networks:
+      threepod-dev:
+        aliases:
+          - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    pids_limit: 200
+    mem_limit: 768m
+    cpus: 1.0
+
+networks:
+  threepod-dev:
+    external: true
+    name: threepod-dev
