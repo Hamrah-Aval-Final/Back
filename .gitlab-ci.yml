@@ -141,6 +141,8 @@ update_staging_gitops:
   image:
     name: mikefarah/yq:4.47.2
     entrypoint: [""]
+    docker:
+      user: "0"
   stage: gitops
   tags:
     - threepod
