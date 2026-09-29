@@ -9,8 +9,9 @@ stages:
   - test
   - sonar
   - build
+  - deploy
   - gitops
-
+  
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   IMAGE_NAME: "$NEXUS_REGISTRY/threepod/backend"
