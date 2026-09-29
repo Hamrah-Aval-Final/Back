@@ -9,12 +9,13 @@ stages:
   - test
   - sonar
   - build
-  - deploy
+  - gitops
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   IMAGE_NAME: "$NEXUS_REGISTRY/threepod/backend"
   IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+  GITOPS_COMPONENT: "backend"
 
 .default_python:
   image: python:3.11-slim
@@ -135,3 +136,73 @@ deploy_development:
     - ssh -i "$DEV_SSH_PRIVATE_KEY" -p "$DEV_DEPLOY_PORT" "$DEV_DEPLOY_USER@$DEV_DEPLOY_HOST" "curl --fail --silent --show-error --retry 12 --retry-delay 5 http://127.0.0.1:8000/health/ready"
   rules:
     - if: '$CI_COMMIT_BRANCH == "develop"'
+update_staging_gitops:
+  image:
+    name: mikefarah/yq:4.47.2
+    entrypoint: [""]
+  stage: gitops
+  tags:
+    - threepod
+    - ci
+    - test
+    - sonar
+  variables:
+    GIT_STRATEGY: none
+    GITOPS_FILE: "environments/staging/values.yaml"
+  needs:
+    - build_image
+  before_script:
+    - apk add --no-cache curl jq
+    - test -n "$GITOPS_API_TOKEN"
+    - test -n "$GITOPS_PROJECT_ID"
+    - test -n "$GITOPS_API_URL"
+  script:
+    - export GITOPS_BRANCH="gitops/staging/${GITOPS_COMPONENT}-${CI_COMMIT_SHORT_SHA}-${CI_JOB_ID}"
+
+    - |
+      curl --fail-with-body --silent --show-error \
+        --request POST \
+        --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
+        --data-urlencode "branch=$GITOPS_BRANCH" \
+        --data-urlencode "ref=main" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/branches" \
+        > branch-response.json
+
+    - |
+      curl --fail-with-body --silent --show-error \
+        --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
+        --get \
+        --data-urlencode "ref=$GITOPS_BRANCH" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/environments%2Fstaging%2Fvalues.yaml/raw" \
+        --output gitops-values.yaml
+
+    - yq -i ".${GITOPS_COMPONENT}.image.tag = strenv(IMAGE_TAG)" gitops-values.yaml
+
+    - |
+      test "$(yq ".${GITOPS_COMPONENT}.image.tag" gitops-values.yaml)" = "$IMAGE_TAG"
+
+    - |
+      curl --fail-with-body --silent --show-error \
+        --request PUT \
+        --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
+        --form "branch=$GITOPS_BRANCH" \
+        --form "commit_message=chore(staging): deploy ${GITOPS_COMPONENT} ${IMAGE_TAG}" \
+        --form "content=<gitops-values.yaml" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/environments%2Fstaging%2Fvalues.yaml" \
+        > commit-response.json
+
+    - |
+      curl --fail-with-body --silent --show-error \
+        --request POST \
+        --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
+        --form "source_branch=$GITOPS_BRANCH" \
+        --form "target_branch=main" \
+        --form "title=chore(staging): deploy ${GITOPS_COMPONENT} ${IMAGE_TAG}" \
+        --form "description=Created by ${CI_PROJECT_PATH} pipeline ${CI_PIPELINE_URL}. Image: ${IMAGE_NAME}:${IMAGE_TAG}" \
+        --form "remove_source_branch=true" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/merge_requests" \
+        > merge-request-response.json
+
+    - echo "GitOps MR $(jq -r '.web_url' merge-request-response.json)"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+/'
