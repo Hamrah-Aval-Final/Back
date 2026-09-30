@@ -372,7 +372,7 @@ auto_version_tag:
         --data-urlencode "message=Automated $BUMP_TYPE release $NEW_TAG" \
         "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/tags"
 
-      echo "Created tag $NEW_TAG"
+      echo "Created tag $NEW_TAG" 
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
