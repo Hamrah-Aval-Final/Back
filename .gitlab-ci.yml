@@ -151,7 +151,7 @@ update_staging_gitops:
     - sonar
   variables:
     GIT_STRATEGY: none
-    GITOPS_FILE: "environments/staging/values.yaml"
+    GITOPS_FILE_ENCODED: "environments%2Fstaging%2Fbackend-image.yaml"
   needs:
     - build_image
   before_script:
@@ -176,22 +176,20 @@ update_staging_gitops:
         --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
         --get \
         --data-urlencode "ref=$GITOPS_BRANCH" \
-        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/environments%2Fstaging%2Fvalues.yaml/raw" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/$GITOPS_FILE_ENCODED/raw" \
         --output gitops-values.yaml
 
-    - yq -i ".${GITOPS_COMPONENT}.image.tag = strenv(IMAGE_TAG)" gitops-values.yaml
-
-    - |
-      test "$(yq ".${GITOPS_COMPONENT}.image.tag" gitops-values.yaml)" = "$IMAGE_TAG"
+    - yq -i ".backend.image.tag = strenv(IMAGE_TAG)" gitops-values.yaml
+    - test "$(yq '.backend.image.tag' gitops-values.yaml)" = "$IMAGE_TAG"
 
     - |
       curl --fail-with-body --silent --show-error \
         --request PUT \
         --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
         --form "branch=$GITOPS_BRANCH" \
-        --form "commit_message=chore(staging): deploy ${GITOPS_COMPONENT} ${IMAGE_TAG}" \
+        --form "commit_message=chore(staging): deploy backend ${IMAGE_TAG}" \
         --form "content=<gitops-values.yaml" \
-        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/environments%2Fstaging%2Fvalues.yaml" \
+        "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/repository/files/$GITOPS_FILE_ENCODED" \
         > commit-response.json
 
     - |
@@ -200,7 +198,7 @@ update_staging_gitops:
         --header "PRIVATE-TOKEN: $GITOPS_API_TOKEN" \
         --form "source_branch=$GITOPS_BRANCH" \
         --form "target_branch=main" \
-        --form "title=chore(staging): deploy ${GITOPS_COMPONENT} ${IMAGE_TAG}" \
+        --form "title=chore(staging): deploy backend ${IMAGE_TAG}" \
         --form "description=Created by ${CI_PROJECT_PATH} pipeline ${CI_PIPELINE_URL}. Image: ${IMAGE_NAME}:${IMAGE_TAG}" \
         --form "remove_source_branch=true" \
         "$GITOPS_API_URL/projects/$GITOPS_PROJECT_ID/merge_requests" \
