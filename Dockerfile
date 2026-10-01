@@ -33,8 +33,17 @@ RUN groupadd --gid 10001 app \
         app
 
 COPY --from=builder /opt/venv /opt/venv
-COPY --chown=10001:10001 . /app/Back
+COPY --chown=10001:10001 \
+    __init__.py \
+    cache.py \
+    config.py \
+    database.py \
+    main.py \
+    models.py \
+    schemas.py \
+    /app/Back/
 
+COPY --chown=10001:10001 routers/ /app/Back/routers/
 USER 10001:10001
 
 EXPOSE 8000
